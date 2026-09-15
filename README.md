@@ -57,11 +57,13 @@ attention_score = q_m · k_n^T
 
 **1. MHA (Multi-Head Attention) - 标准多头注意力**
 - 每个头都有独立的 Q/K/V
+- 例如有 32 个 Query 头，就有 32 个 Key 头和 32 个 Value 头
 - 参数量:heads × d_k × d_model × 3 (Q/K/V各一份)
 - 显存占用:**最大**(推理时需要缓存所有 K/V)
 
 **2. MQA (Multi-Query Attention) - 多查询注意力**
 - **所有头共享同一组 K/V**,每个头只有独立的 Q
+- 例如有 32 个 Query 头，但整个层只有 1 个 Key 头和 1 个 Value 头
 - 参数量:heads × d_k × d_model (Q) + d_k × d_model × 2 (共享K/V)
 - 显存占用:**最小**(KV Cache 只需存储一份)
 - 优点:推理速度快(KV Cache 小),适合推理部署
@@ -80,6 +82,10 @@ attention_score = q_m · k_n^T
 | **MHA** | H | H | 最大 | 最高 | 慢 | BERT、GPT-3 |
 | **MQA** | 1 | H | 最小 | 略降 | 最快 | PaLM、Falcon |
 | **GQA** | G (1<G<H) | H | 中等 | 平衡 | 平衡 | LLaMA-2、Mistral |
+
+- **选择 MHA 的情况**：更关注模型质量和表达能力；推理资源充足；序列较短；对推理速度和 KV Cache 不敏感
+- **选择 MQA 的情况**：追求极致生成速度；显存和带宽非常有限；可以接受一定的质量损失；更重视低成本、高并发部署
+- **选择 GQA 的情况**：希望兼顾质量和效率；需要长上下文推理；需要部署大规模生成服务；是现代 LLM 最常见、也最实用的折中方案
 
 #### Q5：请比较一下几种常见的 LLM 架构,例如 Encoder-Only, Decoder-Only, 和 Encoder-Decoder,并说明它们各自最擅长的任务类型。
 **1. Encoder-Only (编码器架构)**
