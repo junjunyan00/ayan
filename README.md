@@ -26,7 +26,111 @@ RNN 反向传播要经过 n  步连乘，梯度极易消失或爆炸（即使 LS
 3.**并行计算**
 RNN 天然是串行的：必须算完第 t  步才能算第 t+1  步，GPU 的并行能力大量浪费。自注意力所有位置的计算互不依赖，可完全并行——这让 Transformer 能用海量数据+大算力暴力扩展（scaling law 的工程基础）
 
-4.**直接可解释的"关注模式"**
-注意力权重矩阵本身就是一张"谁看谁"的关系图，比 RNN 的黑盒 hidden state 更透明（虽然对可解释性学界有争议，但至少结构上是显式的）。
+#### Q2:什么是位置编码?在 Transformer 中,为什么它是必需的?请列举至少两种实现方式。
+- **位置编码**：位置编码（Positional Encoding）是把词元在序列中的位置信息注入 Transformer 的一组向量或函数
+- **为什么是必须的？**：自注意力本身不具备序列顺序感知能力，如果调换词元顺序，但未换词元内容会导致词元集合相同，因此需要位置编码来打破这种“位置不变性”，让模型知道：
+词元处于序列的哪个位置；两个词元之间相隔多远；哪些词在前、哪些词在后
+- **实现方式**：①正弦余弦位置编码②相对位置编码，不显示两个词元的绝对位置，而是显示两者的相对距离
+
+#### Q3:请你详细介绍ROPE,对比绝对位置编码它的优劣势分别是什么?
+- **ROPE**：旋转位置编码，是一种通过“旋转 Query 和 Key”来注入位置信息的相对位置编码方法，即只有两个位置的相对距离影响注意力分数
+- **数学公式**：
+```
+q_m = (W_q · x_m) · e^(imθ)
+k_n = (W_k · x_n) · e^(inθ)
+
+attention_score = q_m · k_n^T
+                = (W_q · x_m) · (W_k · x_n)^T · e^(i(m-n)θ)
+```
+核心:注意力分数只依赖于相对位置 (m-n),而非绝对位置 m 和 n
+**vs 绝对位置编码对比**:
+
+| 维度 | 绝对位置编码(APE) | ROPE |
+|------|------------------|------|
+| 泛化性 | 超过训练长度性能下降 | 外推性强 |
+| 参数量 | 需要额外参数(Learned Embedding) | 无额外参数 |
+| 长文本 | 表现较差 | 表现优秀 |
+| 应用 | BERT、GPT早期版本 | LLaMA、GPT-NeoX、Qwen |
+ 
+#### Q4:你知道MHA,MQA,GQA的区别吗?详细解释一下
+这三者都是 Attention 机制的变体,核心区别在于 **K/V 的头数设计**。
+
+**1. MHA (Multi-Head Attention) - 标准多头注意力**
+- 每个头都有独立的 Q/K/V
+- 参数量:heads × d_k × d_model × 3 (Q/K/V各一份)
+- 显存占用:**最大**(推理时需要缓存所有 K/V)
+
+**2. MQA (Multi-Query Attention) - 多查询注意力**
+- **所有头共享同一组 K/V**,每个头只有独立的 Q
+- 参数量:heads × d_k × d_model (Q) + d_k × d_model × 2 (共享K/V)
+- 显存占用:**最小**(KV Cache 只需存储一份)
+- 优点:推理速度快(KV Cache 小),适合推理部署
+- 缺点:精度可能略有下降
+
+**3. GQA (Grouped-Query Attention) - 分组查询注意力**
+- **折中方案**:将heads分成G组,每组共享K/V
+- 例如:8个head,分成2组,每组4个head共享一套K/V
+- 参数量:介于 MHA 和 MQA 之间
+- 精度 vs 速度的平衡点
+
+**对比表格**:
+
+| 类型 | K/V头数 | Q头数 | KV Cache | 精度 | 速度 | 代表模型 |
+|------|---------|-------|----------|------|------|---------|
+| **MHA** | H | H | 最大 | 最高 | 慢 | BERT、GPT-3 |
+| **MQA** | 1 | H | 最小 | 略降 | 最快 | PaLM、Falcon |
+| **GQA** | G (1<G<H) | H | 中等 | 平衡 | 平衡 | LLaMA-2、Mistral |
+
+#### Q5：请比较一下几种常见的 LLM 架构,例如 Encoder-Only, Decoder-Only, 和 Encoder-Decoder,并说明它们各自最擅长的任务类型。
+**1. Encoder-Only (编码器架构)**
+- **代表模型**:BERT、RoBERTa、ALBERT
+- **Attention机制**:双向Attention(可以看到前后文)
+- **预训练任务**:MLM(Masked Language Modeling)
+- **擅长任务**:
+  - ✅ 文本分类(情感分析、主题分类)
+  - ✅ 序列标注(NER、词性标注)
+  - ✅ 问答任务(抽取式QA)
+  - ✅ 文本相似度计算
+- **不擅长**:文本生成(因为是双向,无法自回归生成)
+
+**2. Decoder-Only (解码器架构)**
+- **代表模型**:GPT系列、LLaMA、Qwen
+- **Attention机制**:单向Attention(Causal Attention,只能看到前文)
+- **预训练任务**:CLM(Causal Language Modeling / Next Token Prediction)
+- **擅长任务**:
+  - ✅ 文本生成(续写、创作)
+  - ✅ 对话任务(ChatGPT)
+  - ✅ 代码生成(Codex)
+  - ✅ In-Context Learning(少样本学习)
+- **特点**:Scaling Law 效果最好,是目前大模型主流架构
+
+**3. Encoder-Decoder (编码器-解码器架构)**
+- **代表模型**:T5、BART、mT5
+- **Attention机制**:
+  - Encoder:双向Attention
+  - Decoder:单向Attention + Cross-Attention(连接Encoder输出)
+- **预训练任务**:Seq2Seq任务(如文本去噪、Span Masking)
+- **擅长任务**:
+  - ✅ 机器翻译
+  - ✅ 文本摘要
+  - ✅ 文本改写
+  - ✅ 任何需要"理解输入+生成输出"的任务
+
+**对比总结**:
+
+| 架构 | Attention | 擅长任务 | 代表模型 | Scaling潜力 |
+|------|-----------|---------|----------|-----------|
+| **Encoder-Only** | 双向 | 理解类任务 | BERT | 中 |
+| **Decoder-Only** | 单向(Causal) | 生成类任务 | GPT、LLaMA | **最高** |
+| **Encoder-Decoder** | 混合 | Seq2Seq任务 | T5 | 中 |
+
+**趋势洞察**(加分项):
+- **当前主流**:Decoder-Only 一统天下(GPT、LLaMA、Qwen等)
+- **原因**:
+  1. Scaling Law 最好
+  2. In-Context Learning 能力强
+  3. 通过Prompt可以完成所有任务(包括理解类任务)
+- **Encoder-Only 的未来**:在Embedding、检索等特定场景仍有价值
+  
 
 
